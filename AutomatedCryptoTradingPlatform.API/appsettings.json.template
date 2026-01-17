@@ -7,7 +7,7 @@
   },
   "AllowedHosts": "*",
   "JwtSettings": {
-    "SecretKey": "YourSuperSecretKeyThatIsAtLeast32CharactersLong!",
+    "SecretKey": "YOUR_JWT_SECRET_KEY_HERE_AT_LEAST_32_CHARACTERS",
     "Issuer": "AutomatedCryptoTradingPlatform",
     "Audience": "AutomatedCryptoTradingPlatform",
     "ExpiryMinutes": "60"
@@ -16,13 +16,13 @@
     "SmtpServer": "smtp.gmail.com",
     "SmtpPort": 587,
     "SenderName": "Automated Crypto Trading",
-    "SenderEmail": "hainshe186086@fpt.edu.vn",
-    "Password": "egssnaumvxkamrep",
+    "SenderEmail": "YOUR_EMAIL@gmail.com",
+    "Password": "YOUR_GMAIL_APP_PASSWORD_HERE",
     "EnableSsl": true
   },
   "OAuthSettings": {
     "Google": {
-      "ClientId": "1098527168496-i0fqdojhl6snoccki0q10dtti09sqqbg.apps.googleusercontent.com"
+      "ClientId": "YOUR_GOOGLE_CLIENT_ID_HERE"
     },
     "Binance": {
       "ApiEndpoint": "https://api.binance.com",
@@ -34,6 +34,6 @@
     }
   },
   "EncryptionSettings": {
-    "Key": "YourEncryptionKeyThatIsAtLeast32CharsLong123!"
+    "Key": "YOUR_ENCRYPTION_KEY_AT_LEAST_32_CHARACTERS_HERE"
   }
 }
