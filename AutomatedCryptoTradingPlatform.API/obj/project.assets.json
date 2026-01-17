@@ -2583,23 +2583,26 @@
     ]
   },
   "packageFolders": {
-    "C:\\Users\\FPT SHOP\\.nuget\\packages\\": {},
+    "C:\\Users\\DELL-PC\\.nuget\\packages\\": {},
+    "C:\\Program Files\\DevExpress 24.1\\Components\\Offline Packages": {},
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
   },
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "D:\\Workspace\\SEP490\\AutomatedCryptoTradingPlatform\\AutomatedCryptoTradingPlatform.API\\AutomatedCryptoTradingPlatform.API.csproj",
+      "projectUniqueName": "d:\\SEP490\\BE\\AutomatedCryptoTradingPlatform.Backend\\AutomatedCryptoTradingPlatform.API\\AutomatedCryptoTradingPlatform.API.csproj",
       "projectName": "AutomatedCryptoTradingPlatform.API",
-      "projectPath": "D:\\Workspace\\SEP490\\AutomatedCryptoTradingPlatform\\AutomatedCryptoTradingPlatform.API\\AutomatedCryptoTradingPlatform.API.csproj",
-      "packagesPath": "C:\\Users\\FPT SHOP\\.nuget\\packages\\",
-      "outputPath": "D:\\Workspace\\SEP490\\AutomatedCryptoTradingPlatform\\AutomatedCryptoTradingPlatform.API\\obj\\",
+      "projectPath": "d:\\SEP490\\BE\\AutomatedCryptoTradingPlatform.Backend\\AutomatedCryptoTradingPlatform.API\\AutomatedCryptoTradingPlatform.API.csproj",
+      "packagesPath": "C:\\Users\\DELL-PC\\.nuget\\packages\\",
+      "outputPath": "d:\\SEP490\\BE\\AutomatedCryptoTradingPlatform.Backend\\AutomatedCryptoTradingPlatform.API\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
+        "C:\\Program Files\\DevExpress 24.1\\Components\\Offline Packages",
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
       ],
       "configFilePaths": [
-        "C:\\Users\\FPT SHOP\\AppData\\Roaming\\NuGet\\NuGet.Config",
+        "C:\\Users\\DELL-PC\\AppData\\Roaming\\NuGet\\NuGet.Config",
+        "C:\\Program Files (x86)\\NuGet\\Config\\DevExpress 24.1.config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
       ],
@@ -2608,6 +2611,7 @@
       ],
       "sources": {
         "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+        "C:\\Program Files\\DevExpress 24.1\\Components\\System\\Components\\Packages": {},
         "C:\\Program Files\\dotnet\\library-packs": {},
         "https://api.nuget.org/v3/index.json": {}
       },
@@ -2615,11 +2619,11 @@
         "net8.0": {
           "targetAlias": "net8.0",
           "projectReferences": {
-            "D:\\Workspace\\SEP490\\AutomatedCryptoTradingPlatform\\AutomatedCryptoTradingPlatform.Core\\AutomatedCryptoTradingPlatform.Core.csproj": {
-              "projectPath": "D:\\Workspace\\SEP490\\AutomatedCryptoTradingPlatform\\AutomatedCryptoTradingPlatform.Core\\AutomatedCryptoTradingPlatform.Core.csproj"
+            "d:\\SEP490\\BE\\AutomatedCryptoTradingPlatform.Backend\\AutomatedCryptoTradingPlatform.Core\\AutomatedCryptoTradingPlatform.Core.csproj": {
+              "projectPath": "d:\\SEP490\\BE\\AutomatedCryptoTradingPlatform.Backend\\AutomatedCryptoTradingPlatform.Core\\AutomatedCryptoTradingPlatform.Core.csproj"
             },
-            "D:\\Workspace\\SEP490\\AutomatedCryptoTradingPlatform\\AutomatedCryptoTradingPlatform.Infrastructure\\AutomatedCryptoTradingPlatform.Infrastructure.csproj": {
-              "projectPath": "D:\\Workspace\\SEP490\\AutomatedCryptoTradingPlatform\\AutomatedCryptoTradingPlatform.Infrastructure\\AutomatedCryptoTradingPlatform.Infrastructure.csproj"
+            "d:\\SEP490\\BE\\AutomatedCryptoTradingPlatform.Backend\\AutomatedCryptoTradingPlatform.Infrastructure\\AutomatedCryptoTradingPlatform.Infrastructure.csproj": {
+              "projectPath": "d:\\SEP490\\BE\\AutomatedCryptoTradingPlatform.Backend\\AutomatedCryptoTradingPlatform.Infrastructure\\AutomatedCryptoTradingPlatform.Infrastructure.csproj"
             }
           }
         }
@@ -2664,6 +2668,24 @@
         ],
         "assetTargetFallback": true,
         "warn": true,
+        "downloadDependencies": [
+          {
+            "name": "Microsoft.AspNetCore.App.Ref",
+            "version": "[8.0.23, 8.0.23]"
+          },
+          {
+            "name": "Microsoft.NETCore.App.Host.win-x64",
+            "version": "[8.0.23, 8.0.23]"
+          },
+          {
+            "name": "Microsoft.NETCore.App.Ref",
+            "version": "[8.0.23, 8.0.23]"
+          },
+          {
+            "name": "Microsoft.WindowsDesktop.App.Ref",
+            "version": "[8.0.23, 8.0.23]"
+          }
+        ],
         "frameworkReferences": {
           "Microsoft.AspNetCore.App": {
             "privateAssets": "none"
@@ -2672,7 +2694,7 @@
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.304/PortableRuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.309/PortableRuntimeIdentifierGraph.json"
       }
     }
   }

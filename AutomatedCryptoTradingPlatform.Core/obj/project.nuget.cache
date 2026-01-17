@@ -1,8 +1,12 @@
 {
   "version": 2,
-  "dgSpecHash": "pPdT6dF0i74=",
+  "dgSpecHash": "PG9AaNac5nU=",
   "success": true,
-  "projectFilePath": "D:\\Workspace\\SEP490\\AutomatedCryptoTradingPlatform\\AutomatedCryptoTradingPlatform.Core\\AutomatedCryptoTradingPlatform.Core.csproj",
-  "expectedPackageFiles": [],
+  "projectFilePath": "d:\\SEP490\\BE\\AutomatedCryptoTradingPlatform.Backend\\AutomatedCryptoTradingPlatform.Core\\AutomatedCryptoTradingPlatform.Core.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\DELL-PC\\.nuget\\packages\\microsoft.netcore.app.ref\\8.0.23\\microsoft.netcore.app.ref.8.0.23.nupkg.sha512",
+    "C:\\Users\\DELL-PC\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.23\\microsoft.windowsdesktop.app.ref.8.0.23.nupkg.sha512",
+    "C:\\Users\\DELL-PC\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.23\\microsoft.aspnetcore.app.ref.8.0.23.nupkg.sha512"
+  ],
   "logs": []
 }
