@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("AutomatedCryptoTradingPlatform.Core")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+720186d8a369b75962498e83c334d4232f4cdad9")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f97f84efa33789c76f49b39906c373b39046e097")]
 [assembly: System.Reflection.AssemblyProductAttribute("AutomatedCryptoTradingPlatform.Core")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AutomatedCryptoTradingPlatform.Core")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
