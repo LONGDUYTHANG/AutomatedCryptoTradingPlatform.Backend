@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto-trading-api
+    ports:
+      - "5000:8080"
+      - "5001:8081"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+    volumes:
+      # Mount appsettings.json for local development
+      - ./AutomatedCryptoTradingPlatform.API/appsettings.json:/app/appsettings.json:ro
+    networks:
+      - crypto-trading-network
+    restart: unless-stopped
+
+networks:
+  crypto-trading-network:
+    driver: bridge

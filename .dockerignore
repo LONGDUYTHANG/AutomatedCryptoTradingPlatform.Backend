@@ -1,0 +1,65 @@
+# Build artifacts
+**/bin/
+**/obj/
+**/out/
+
+# VS Code
+.vscode/
+.vs/
+
+# User-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+
+# NuGet Packages
+*.nupkg
+*.snupkg
+**/packages/*
+
+# Sensitive files
+appsettings.json
+appsettings.Development.json
+appsettings.*.json
+!appsettings.json.template
+*.key
+*.pfx
+secrets.json
+
+# Docker files
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+
+# Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# Others
+*.cache
+*.log
+*.tmp
+*.temp
+node_modules/
