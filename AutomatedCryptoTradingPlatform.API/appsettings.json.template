@@ -35,5 +35,11 @@
   },
   "EncryptionSettings": {
     "Key": "YOUR_ENCRYPTION_KEY_AT_LEAST_32_CHARACTERS_HERE"
+  },
+  {
+  "ConnectionStrings": {
+    "Default": "Host=localhost;Port=5432;Database=automated_crypto;Username=minh;Password=123"
   }
+}
+
 }
