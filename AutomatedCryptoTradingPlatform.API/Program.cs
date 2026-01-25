@@ -2,8 +2,10 @@
 using AutomatedCryptoTradingPlatform.Core.Interfaces.Repositories;
 using AutomatedCryptoTradingPlatform.Core.Interfaces.Services;
 using AutomatedCryptoTradingPlatform.Core.Services;
+using AutomatedCryptoTradingPlatform.Infrastructure.Data;
 using AutomatedCryptoTradingPlatform.Infrastructure.Repositories;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 
@@ -17,7 +19,8 @@ builder.Services.AddControllers().AddJsonOptions(options =>
 {
     options.JsonSerializerOptions.PropertyNamingPolicy = null;
 });
-
+builder.Services.AddDbContext<AppDbContext>(opt =>
+    opt.UseNpgsql(builder.Configuration.GetConnectionString("MyCnn")));
 // Cấu hình swagger UI
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -25,7 +28,7 @@ builder.Services.AddSwaggerGen();
 //Cấu hình DI
 builder.Services.AddScoped(typeof(IBaseRepository<>), typeof(BaseRepository<>));
 builder.Services.AddScoped(typeof(IBaseService<>), typeof(BaseService<>));
-builder.Services.AddScoped<IAuthService, AuthService>();
+//builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IOAuthService, OAuthService>();
@@ -95,6 +98,12 @@ var app = builder.Build();
 
 // Đăng kí Global Exception Middleware
 app.UseMiddleware<GlobalExceptionMiddleware>();
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+    await DbSeeder.SeedAdminAsync(db);
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
