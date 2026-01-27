@@ -1,8 +1,8 @@
-using AutomatedCryptoTradingPlatform.Core.Dtos.Requests;
+using AutomatedCryptoTradingPlatform.Core.Dtos.Responses;
 
 namespace AutomatedCryptoTradingPlatform.Core.Interfaces.Services;
 
 public interface IOAuthService
 {
-    Task<ExternalLoginDto> VerifyGoogleTokenAsync(string idToken);
+    Task<ProviderUserInfo> VerifyGoogleTokenAsync(string idToken);
 }

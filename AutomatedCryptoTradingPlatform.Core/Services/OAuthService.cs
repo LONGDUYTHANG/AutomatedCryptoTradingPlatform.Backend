@@ -1,4 +1,4 @@
-using AutomatedCryptoTradingPlatform.Core.Dtos.Requests;
+using AutomatedCryptoTradingPlatform.Core.Dtos.Responses;
 using AutomatedCryptoTradingPlatform.Core.Interfaces.Services;
 using Google.Apis.Auth;
 using Microsoft.Extensions.Configuration;
@@ -14,7 +14,7 @@ public class OAuthService : IOAuthService
         _configuration = configuration;
     }
 
-    public async Task<ExternalLoginDto> VerifyGoogleTokenAsync(string idToken)
+    public async Task<ProviderUserInfo> VerifyGoogleTokenAsync(string idToken)
     {
         try
         {
@@ -32,14 +32,15 @@ public class OAuthService : IOAuthService
                 throw new Exception("Invalid Google token");
             }
 
-            // Extract user information from the payload
-            return new ExternalLoginDto
+            // Extract user information from the verified payload
+            return new ProviderUserInfo
             {
                 Provider = "Google",
                 ProviderId = payload.Subject, // Google's unique user ID
                 Email = payload.Email,
-                FullName = payload.Name,
-                AccessToken = idToken
+                Name = payload.Name,
+                EmailVerified = payload.EmailVerified, // Google verifies email
+                PictureUrl = payload.Picture
             };
         }
         catch (InvalidJwtException)

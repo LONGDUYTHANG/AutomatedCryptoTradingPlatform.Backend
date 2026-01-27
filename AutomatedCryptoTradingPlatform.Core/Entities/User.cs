@@ -1,31 +1,29 @@
-using AutomatedCryptoTradingPlatform.Core.Attributes;
-
 namespace AutomatedCryptoTradingPlatform.Core.Entities;
 
+/// <summary>
+/// Core user entity - maps to users table
+/// </summary>
 public class User
 {
-    [TrackProperty]
-    public Guid UserId { get; set; }
+    public long Id { get; set; }
     
     public string Email { get; set; } = string.Empty;
     
-    public string PasswordHash { get; set; } = string.Empty;
+    public string? Username { get; set; }
     
-    public string FullName { get; set; } = string.Empty;
+    public string? PasswordHash { get; set; }
     
-    public bool TwoFactorEnabled { get; set; } = false;
+    public string Status { get; set; } = "active"; // active, inactive, banned
     
-    public string? TwoFactorSecret { get; set; }
+    public string Role { get; set; } = "user"; // user, admin
     
-    public string Provider { get; set; } = "Local"; // Local, Google, Binance, OKX
+    public DateTime CreatedAt { get; set; }
     
-    public string? ProviderId { get; set; }
+    public DateTime UpdatedAt { get; set; }
     
-    public bool IsEmailVerified { get; set; } = false; // Email verification status
-    
-    public bool IsActive { get; set; } = true;
-    
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    
-    public DateTime? UpdatedAt { get; set; }
+    // Navigation properties (not in database)
+    public UserProfile? Profile { get; set; }
+    public List<SocialAccount> SocialAccounts { get; set; } = new();
+    public List<WalletAccount> WalletAccounts { get; set; } = new();
+    public TwoFactorAuth? TwoFactorAuth { get; set; }
 }

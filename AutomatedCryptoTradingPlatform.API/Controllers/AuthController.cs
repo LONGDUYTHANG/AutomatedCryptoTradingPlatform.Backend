@@ -13,15 +13,18 @@ public class AuthController : ControllerBase
     private readonly IAuthService _authService;
     private readonly IOtpService _otpService;
     private readonly IOAuthService _oauthService;
+    private readonly IWalletAuthService _walletAuthService;
 
     public AuthController(
         IAuthService authService, 
         IOtpService otpService,
-        IOAuthService oauthService)
+        IOAuthService oauthService,
+        IWalletAuthService walletAuthService)
     {
         _authService = authService;
         _otpService = otpService;
         _oauthService = oauthService;
+        _walletAuthService = walletAuthService;
     }
 
     [HttpPost("register")]
@@ -60,46 +63,22 @@ public class AuthController : ControllerBase
         {
             var result = await _authService.LoginAsync(loginDto);
 
-            // If 2FA is required, don't set cookie yet
-            if (result.Require2FA)
+            // Set HttpOnly Cookie with token from AuthResponseDto
+            if (!string.IsNullOrEmpty(result.Token))
             {
-                return Ok(new BaseResponse<AuthResponseDto>
+                HttpContext.Response.Cookies.Append("accessToken", result.Token, new CookieOptions
                 {
-                    Success = true,
-                    Message = "2FA code required",
-                    Data = result,
-                    StatusCode = 200
+                    HttpOnly = true,
+                    Secure = true, // Only works with HTTPS
+                    SameSite = SameSiteMode.Strict,
+                    Expires = DateTimeOffset.UtcNow.AddMinutes(result.Require2FA ? 5 : 60) // Partial tokens expire in 5 min
                 });
             }
-
-            // Get user to generate JWT
-            var user = await _authService.GetUserByEmailAsync(loginDto.Email);
-            if (user == null)
-            {
-                return Unauthorized(new BaseResponse<object>
-                {
-                    Success = false,
-                    Message = "Invalid credentials",
-                    StatusCode = 401
-                });
-            }
-
-            // Generate JWT token
-            var token = await _authService.GenerateJwtTokenAsync(user);
-
-            // Set HttpOnly Cookie
-            HttpContext.Response.Cookies.Append("accessToken", token, new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = true, // Only works with HTTPS
-                SameSite = SameSiteMode.Strict,
-                Expires = DateTimeOffset.UtcNow.AddMinutes(60)
-            });
 
             return Ok(new BaseResponse<AuthResponseDto>
             {
                 Success = true,
-                Message = "Login successful",
+                Message = result.Require2FA ? "2FA code required. Please verify using the code from your authenticator app." : "Login successful",
                 Data = result,
                 StatusCode = 200
             });
@@ -111,6 +90,109 @@ public class AuthController : ControllerBase
                 Success = false,
                 Message = ex.Message,
                 StatusCode = 401
+            });
+        }
+    }
+
+    [HttpPost("verify-2fa")]
+    public async Task<IActionResult> Verify2FA([FromBody] Verify2FaDto verify2FaDto)
+    {
+        try
+        {
+            // Get userId from claims (user must be partially authenticated after login)
+            var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            
+            if (string.IsNullOrEmpty(userIdClaim))
+            {
+                return Unauthorized(new BaseResponse<object>
+                {
+                    Success = false,
+                    Message = "Please login first before verifying 2FA",
+                    StatusCode = 401
+                });
+            }
+
+            // Check if this is a partial token (2FA pending)
+            var twoFactorPending = User.FindFirst("2fa_pending")?.Value;
+            if (twoFactorPending != "true")
+            {
+                return BadRequest(new BaseResponse<object>
+                {
+                    Success = false,
+                    Message = "2FA verification not required for this session",
+                    StatusCode = 400
+                });
+            }
+
+            if (!Guid.TryParse(userIdClaim, out var userId))
+            {
+                return BadRequest(new BaseResponse<object>
+                {
+                    Success = false,
+                    Message = "Invalid user ID",
+                    StatusCode = 400
+                });
+            }
+
+            // Verify 2FA code
+            var isValid = await _authService.Verify2FAAsync(userId, verify2FaDto.Code);
+
+            if (!isValid)
+            {
+                return Unauthorized(new BaseResponse<object>
+                {
+                    Success = false,
+                    Message = "Invalid 2FA code",
+                    StatusCode = 401
+                });
+            }
+
+            // Get user info
+            var user = await _authService.GetUserByIdAsync(userId);
+            if (user == null)
+            {
+                return NotFound(new BaseResponse<object>
+                {
+                    Success = false,
+                    Message = "User not found",
+                    StatusCode = 404
+                });
+            }
+
+            // Generate new JWT token with full access (2FA verified)
+            var token = await _authService.GenerateJwtTokenAsync(user);
+
+            // Set HttpOnly Cookie
+            HttpContext.Response.Cookies.Append("accessToken", token, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Strict,
+                Expires = DateTimeOffset.UtcNow.AddMinutes(60)
+            });
+
+            return Ok(new BaseResponse<AuthResponseDto>
+            {
+                Success = true,
+                Message = "2FA verification successful",
+                Data = new AuthResponseDto
+                {
+                    UserId = user.UserId,
+                    Email = user.Email,
+                    FullName = user.FullName,
+                    TwoFactorEnabled = user.TwoFactorEnabled,
+                    Require2FA = false
+                },
+                StatusCode = 200
+            });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new BaseResponse<object>
+            {
+                Success = false,
+                Message = ex.Message,
+                StatusCode = 400
             });
         }
     }
@@ -398,8 +480,16 @@ public class AuthController : ControllerBase
     {
         try
         {
-            // Verify Google ID Token
-            var externalLoginDto = await _oauthService.VerifyGoogleTokenAsync(googleLoginDto.IdToken);
+            // Verify Google ID Token and get user info
+            var providerUserInfo = await _oauthService.VerifyGoogleTokenAsync(googleLoginDto.IdToken);
+
+            // Create ExternalLoginDto with verified Google data
+            var externalLoginDto = new ExternalLoginDto
+            {
+                Provider = providerUserInfo.Provider,
+                AccessToken = googleLoginDto.IdToken,
+                IdToken = googleLoginDto.IdToken
+            };
 
             // Login or create user
             var result = await _authService.ExternalLoginAsync(externalLoginDto);
@@ -417,7 +507,7 @@ public class AuthController : ControllerBase
             }
 
             // Get user to generate JWT
-            var user = await _authService.GetUserByProviderAsync(externalLoginDto.Provider, externalLoginDto.ProviderId!);
+            var user = await _authService.GetUserByProviderAsync(providerUserInfo.Provider, providerUserInfo.ProviderId);
             if (user == null)
             {
                 return Unauthorized(new BaseResponse<object>
@@ -464,10 +554,8 @@ public class AuthController : ControllerBase
     {
         try
         {
-            // For Binance, OKX, and other providers
-            // Note: These providers typically require manual API key input or OAuth flow handled by frontend
-            
-            // Login or create user
+            // Verify token with provider and login/create user
+            // Provider verification is handled inside ExternalLoginAsync
             var result = await _authService.ExternalLoginAsync(externalLoginDto);
 
             // If 2FA is required
@@ -482,10 +570,8 @@ public class AuthController : ControllerBase
                 });
             }
 
-            // Get user to generate JWT
-            var user = await _authService.GetUserByProviderAsync(
-                externalLoginDto.Provider, 
-                externalLoginDto.ProviderId!);
+            // Get user by UserId to generate JWT
+            var user = await _authService.GetUserByIdAsync(result.UserId);
             
             if (user == null)
             {
@@ -568,7 +654,7 @@ public class AuthController : ControllerBase
         }
     }
 
-    [HttpPost("verify-2fa")]
+    [HttpPost("activate-2fa")]
     [Authorize]
     public async Task<IActionResult> VerifyAndActivateTwoFactor([FromBody] Verify2FaDto verify2FaDto)
     {
@@ -753,6 +839,121 @@ public class AuthController : ControllerBase
     }
 
     #endregion Exchange Login
+
+    #region Wallet Authentication
+
+    [HttpGet("wallet/nonce")]
+    public async Task<IActionResult> GetWalletNonce([FromQuery] string walletAddress)
+    {
+        try
+        {
+            var nonceResponse = await _walletAuthService.GenerateNonceAsync(walletAddress);
+
+            return Ok(new BaseResponse<WalletNonceResponseDto>
+            {
+                Success = true,
+                Message = "Nonce generated successfully. Sign the message with your wallet.",
+                Data = nonceResponse,
+                StatusCode = 200
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new BaseResponse<object>
+            {
+                Success = false,
+                Message = ex.Message,
+                StatusCode = 400
+            });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new BaseResponse<object>
+            {
+                Success = false,
+                Message = "Failed to generate nonce",
+                StatusCode = 500
+            });
+        }
+    }
+
+    [HttpPost("wallet/login")]
+    public async Task<IActionResult> WalletLogin([FromBody] WalletLoginDto walletLoginDto)
+    {
+        try
+        {
+            // Verify signature and get/create user
+            var result = await _walletAuthService.VerifySignatureAsync(
+                walletLoginDto.WalletAddress,
+                walletLoginDto.Signature,
+                walletLoginDto.Nonce
+            );
+
+            // If 2FA is required
+            if (result.Require2FA)
+            {
+                return Ok(new BaseResponse<AuthResponseDto>
+                {
+                    Success = true,
+                    Message = "2FA code required",
+                    Data = result,
+                    StatusCode = 200
+                });
+            }
+
+            // Get user to generate JWT
+            var user = await _walletAuthService.GetUserByWalletAsync(walletLoginDto.WalletAddress);
+            if (user == null)
+            {
+                return Unauthorized(new BaseResponse<object>
+                {
+                    Success = false,
+                    Message = "Wallet authentication failed",
+                    StatusCode = 401
+                });
+            }
+
+            // Generate JWT token
+            var token = await _authService.GenerateJwtTokenAsync(user);
+
+            // Set HttpOnly Cookie
+            HttpContext.Response.Cookies.Append("accessToken", token, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Strict,
+                Expires = DateTimeOffset.UtcNow.AddMinutes(60)
+            });
+
+            return Ok(new BaseResponse<AuthResponseDto>
+            {
+                Success = true,
+                Message = "Wallet authentication successful",
+                Data = result,
+                StatusCode = 200
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new BaseResponse<object>
+            {
+                Success = false,
+                Message = ex.Message,
+                StatusCode = 401
+            });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new BaseResponse<object>
+            {
+                Success = false,
+                Message = "Wallet authentication failed",
+                StatusCode = 500
+            });
+        }
+    }
+
+    #endregion
 
     #endregion
 }

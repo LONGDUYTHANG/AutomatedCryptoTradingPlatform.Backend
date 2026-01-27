@@ -9,9 +9,9 @@ public interface IAuthService
     Task<AuthResponseDto> RegisterAsync(RegisterDto registerDto);
     Task<AuthResponseDto> LoginAsync(LoginDto loginDto);
     Task<AuthResponseDto> ExternalLoginAsync(ExternalLoginDto externalLoginDto);
-    Task<string> GenerateJwtTokenAsync(User user);
-    Task<User?> GetUserByEmailAsync(string email);
-    Task<User?> GetUserByProviderAsync(string provider, string providerId);
+    Task<string> GenerateJwtTokenAsync(LegacyUser user, bool isRefresh = false, bool partialFor2FA = false);
+    Task<LegacyUser?> GetUserByEmailAsync(string email);
+    Task<LegacyUser?> GetUserByProviderAsync(string provider, string providerId);
     Task ResetPasswordAsync(ResetPasswordDto resetPasswordDto);
     Task ChangePasswordAsync(Guid userId, ChangePasswordDto changePasswordDto);
     
@@ -23,7 +23,8 @@ public interface IAuthService
     Task<Enable2FaResponseDto> EnableTwoFactorAsync(Guid userId);
     Task VerifyAndActivateTwoFactorAsync(Guid userId, string code);
     Task DisableTwoFactorAsync(Guid userId, string password);
-    Task<User?> GetUserByIdAsync(Guid userId);
+    Task<bool> Verify2FAAsync(Guid userId, string twoFactorCode);
+    Task<LegacyUser?> GetUserByIdAsync(Guid userId);
     
     // Exchange Login Methods
     Task<AuthResponseDto> BinanceLoginAsync(BinanceLoginDto binanceLoginDto);

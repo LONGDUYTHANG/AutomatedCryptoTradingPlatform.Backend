@@ -35,5 +35,17 @@
   },
   "EncryptionSettings": {
     "Key": "YOUR_ENCRYPTION_KEY_AT_LEAST_32_CHARACTERS_HERE"
+  },
+  "RedisSettings": {
+    "ConnectionString": "localhost:6379",
+    "InstanceName": "CryptoTradingPlatform:"
+  },
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=localhost;Port=5432;Database=crypto_trading;Username=postgres;Password=YOUR_POSTGRES_PASSWORD"
+  },
+  "SessionSettings": {
+    "SessionDurationDays": 30,
+    "AccessTokenTtlSeconds": 300,
+    "CleanupIntervalHours": 24
   }
 }

@@ -10,8 +10,4 @@ public class LoginDto
     
     [Required(ErrorMessage = "Password is required")]
     public string Password { get; set; } = string.Empty;
-
-    // Optional: Only required if user has 2FA enabled
-    [StringLength(6, MinimumLength = 6, ErrorMessage = "2FA code must be 6 digits")]
-    public string? TwoFactorCode { get; set; }
 }
