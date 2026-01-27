@@ -3,7 +3,9 @@ using AutomatedCryptoTradingPlatform.Core.Dtos.Responses;
 using AutomatedCryptoTradingPlatform.Core.Entities;
 using AutomatedCryptoTradingPlatform.Core.Helpers;
 using AutomatedCryptoTradingPlatform.Core.Interfaces.Services;
+using AutomatedCryptoTradingPlatform.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -13,71 +15,105 @@ namespace AutomatedCryptoTradingPlatform.Core.Services;
 
 public class AuthService : IAuthService
 {
-    // In-memory storage (temporary, will be replaced with database later)
-    private static readonly Dictionary<string, User> _users = new();
+    private readonly IUserRepository _userRepository;
+    private readonly ISocialAccountRepository _socialAccountRepository;
+    private readonly ITwoFactorRepository _twoFactorRepository;
     private readonly IConfiguration _configuration;
     private readonly ITwoFactorService _twoFactorService;
     private readonly IExchangeKeyService _exchangeKeyService;
     private readonly IOtpService _otpService;
+    private readonly ILogger<AuthService> _logger;
 
     public AuthService(
+        IUserRepository userRepository,
+        ISocialAccountRepository socialAccountRepository,
+        ITwoFactorRepository twoFactorRepository,
         IConfiguration configuration, 
         ITwoFactorService twoFactorService,
         IExchangeKeyService exchangeKeyService,
-        IOtpService otpService)
+        IOtpService otpService,
+        ILogger<AuthService> logger)
     {
+        _userRepository = userRepository;
+        _socialAccountRepository = socialAccountRepository;
+        _twoFactorRepository = twoFactorRepository;
         _configuration = configuration;
         _twoFactorService = twoFactorService;
         _exchangeKeyService = exchangeKeyService;
         _otpService = otpService;
+        _logger = logger;
     }
 
     public async Task<AuthResponseDto> RegisterAsync(RegisterDto registerDto)
     {
+        var email = registerDto.Email.ToLower();
+
         // Check if user already exists
-        if (_users.ContainsKey(registerDto.Email.ToLower()))
+        var existingUser = await _userRepository.GetByEmailAsync(email);
+        if (existingUser != null)
         {
             throw new Exception("User with this email already exists");
         }
 
         // Create new user
-        var user = new User
+        var newUser = new Entities.User
         {
-            UserId = Guid.NewGuid(),
-            Email = registerDto.Email.ToLower(),
+            Email = email,
+            Username = registerDto.FullName,
             PasswordHash = CryptographyHelper.HashPassword(registerDto.Password),
-            FullName = registerDto.FullName,
-            Provider = "Local",
-            IsEmailVerified = false, // Email not verified yet
-            CreatedAt = DateTime.UtcNow
+            Status = "Pending", // Email not verified yet
+            Role = "User",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            Profile = new UserProfile
+            {
+                DisplayName = registerDto.FullName
+            }
         };
 
-        // Store user in memory
-        _users[user.Email] = user;
+        // Save to database
+        var userId = await _userRepository.CreateAsync(newUser);
+        newUser.Id = userId;
 
-        return await Task.FromResult(new AuthResponseDto
+        // Convert to legacy format for response
+        var legacyUser = LegacyUser.FromUser(newUser);
+        legacyUser.Provider = "Local";
+        legacyUser.IsEmailVerified = false;
+
+        // Send email verification OTP
+        try
         {
-            UserId = user.UserId,
-            Email = user.Email,
-            FullName = user.FullName,
-            TwoFactorEnabled = user.TwoFactorEnabled
-        });
+            await _otpService.GenerateAndSendOtpAsync(email, "EmailVerification");
+            _logger.LogInformation("Verification email sent to {Email}", email);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send verification email to {Email}", email);
+            // Don't fail registration if email sending fails
+        }
+
+        return new AuthResponseDto
+        {
+            UserId = legacyUser.UserId,
+            Email = legacyUser.Email,
+            FullName = legacyUser.FullName,
+            TwoFactorEnabled = legacyUser.TwoFactorEnabled
+        };
     }
 
     public async Task<AuthResponseDto> LoginAsync(LoginDto loginDto)
     {
         var email = loginDto.Email.ToLower();
 
-        // Check if user exists
-        if (!_users.ContainsKey(email))
+        // Get user from database with all relations
+        var user = await GetUserByEmailAsync(email);
+        if (user == null)
         {
             throw new Exception("Invalid email or password");
         }
 
-        var user = _users[email];
-
         // Verify password
-        if (!CryptographyHelper.VerifyPassword(loginDto.Password, user.PasswordHash))
+        if (string.IsNullOrEmpty(user.PasswordHash) || !CryptographyHelper.VerifyPassword(loginDto.Password, user.PasswordHash))
         {
             throw new Exception("Invalid email or password");
         }
@@ -85,49 +121,58 @@ public class AuthService : IAuthService
         // Check if email is verified (only for local accounts)
         if (user.Provider == "Local" && !user.IsEmailVerified)
         {
-            throw new Exception("Please verify your email before logging in");
+            // Resend OTP if needed
+            try
+            {
+                await _otpService.GenerateAndSendOtpAsync(email, "EmailVerification");
+                throw new Exception("Please verify your email before logging in. A new verification code has been sent to your email.");
+            }
+            catch (Exception ex) when (ex.Message.Contains("verify your email"))
+            {
+                throw; // Rethrow our message
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to resend verification email to {Email}", email);
+                throw new Exception("Please verify your email before logging in. Check your email for the verification code.");
+            }
         }
 
         // Check if user is active
         if (!user.IsActive)
         {
-            throw new Exception("Account is deactivated");
+            throw new Exception("Account is deactivated. Please contact support.");
         }
 
-        // Check if 2FA is enabled
+        // Check if 2FA is enabled - return partial token for verification
         if (user.TwoFactorEnabled)
         {
-            // If 2FA code is not provided
-            if (string.IsNullOrWhiteSpace(loginDto.TwoFactorCode))
+            var partialToken = await GenerateJwtTokenAsync(user, partialFor2FA: true);
+            return new AuthResponseDto
             {
-                return await Task.FromResult(new AuthResponseDto
-                {
-                    UserId = user.UserId,
-                    Email = user.Email,
-                    FullName = user.FullName,
-                    TwoFactorEnabled = true,
-                    Require2FA = true
-                });
-            }
-
-            // Verify 2FA code
-            if (!_twoFactorService.VerifyTwoFactorCode(user.TwoFactorSecret ?? string.Empty, loginDto.TwoFactorCode))
-            {
-                throw new Exception("Invalid 2FA code");
-            }
+                UserId = user.UserId,
+                Email = user.Email,
+                FullName = user.FullName,
+                TwoFactorEnabled = true,
+                Require2FA = true,
+                Token = partialToken // Partial token with 2fa_pending claim
+            };
         }
 
-        return await Task.FromResult(new AuthResponseDto
+        // Generate full access token for users without 2FA
+        var token = await GenerateJwtTokenAsync(user);
+        return new AuthResponseDto
         {
             UserId = user.UserId,
             Email = user.Email,
             FullName = user.FullName,
             TwoFactorEnabled = user.TwoFactorEnabled,
-            Require2FA = false
-        });
+            Require2FA = false,
+            Token = token
+        };
     }
 
-    public async Task<string> GenerateJwtTokenAsync(User user)
+    public async Task<string> GenerateJwtTokenAsync(LegacyUser user, bool isRefresh = false, bool partialFor2FA = false)
     {
         var jwtSettings = _configuration.GetSection("JwtSettings");
         var secretKey = jwtSettings["SecretKey"] ?? throw new Exception("JWT SecretKey not configured");
@@ -138,7 +183,7 @@ public class AuthService : IAuthService
         var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
 
-        var claims = new[]
+        var claimsList = new List<Claim>
         {
             new Claim(JwtRegisteredClaimNames.Sub, user.UserId.ToString()),
             new Claim(JwtRegisteredClaimNames.Email, user.Email),
@@ -146,28 +191,44 @@ public class AuthService : IAuthService
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 
+        // Add 2FA pending claim for partial tokens
+        if (partialFor2FA)
+        {
+            claimsList.Add(new Claim("2fa_pending", "true"));
+        }
+
         var token = new JwtSecurityToken(
             issuer: issuer,
             audience: audience,
-            claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(expiryMinutes),
+            claims: claimsList,
+            expires: DateTime.UtcNow.AddMinutes(partialFor2FA ? 5 : expiryMinutes), // Partial tokens expire in 5 minutes
             signingCredentials: credentials
         );
 
         return await Task.FromResult(new JwtSecurityTokenHandler().WriteToken(token));
     }
 
-    public async Task<User?> GetUserByEmailAsync(string email)
+    public async Task<LegacyUser?> GetUserByEmailAsync(string email)
     {
-        _users.TryGetValue(email.ToLower(), out var user);
-        return await Task.FromResult(user);
+        var user = await _userRepository.GetByEmailWithAllRelationsAsync(email.ToLower());
+        if (user == null) return null;
+
+        return LegacyUser.FromUser(user);
     }
 
-    public async Task<User?> GetUserByProviderAsync(string provider, string providerId)
+    public async Task<LegacyUser?> GetUserByProviderAsync(string provider, string providerId)
     {
-        var user = _users.Values.FirstOrDefault(u => 
-            u.Provider == provider && u.ProviderId == providerId);
-        return await Task.FromResult(user);
+        var socialAccount = await _socialAccountRepository.GetByProviderAsync(provider, providerId);
+        if (socialAccount == null) return null;
+
+        var user = await _userRepository.GetUserWithAllRelationsAsync(socialAccount.UserId);
+        if (user == null) return null;
+
+        var legacyUser = LegacyUser.FromUser(user);
+        legacyUser.Provider = provider;
+        legacyUser.ProviderId = providerId;
+        
+        return legacyUser;
     }
 
     public async Task<AuthResponseDto> ExternalLoginAsync(ExternalLoginDto externalLoginDto)
@@ -188,25 +249,49 @@ public class AuthService : IAuthService
             }
 
             // Create new user from OAuth provider
-            user = new User
+            var newUser = new Entities.User
             {
-                UserId = Guid.NewGuid(),
                 Email = externalLoginDto.Email?.ToLower() ?? $"{externalLoginDto.ProviderId}@{externalLoginDto.Provider.ToLower()}.com",
-                FullName = externalLoginDto.FullName ?? "User",
-                Provider = externalLoginDto.Provider,
-                ProviderId = externalLoginDto.ProviderId,
-                PasswordHash = string.Empty, // OAuth users don't have password
-                IsActive = true,
-                CreatedAt = DateTime.UtcNow
+                Username = externalLoginDto.FullName ?? "User",
+                PasswordHash = null, // OAuth users don't have password
+                Status = "Active",
+                Role = "User",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                Profile = new UserProfile
+                {
+                    DisplayName = externalLoginDto.FullName ?? "User"
+                }
             };
 
-            _users[user.Email] = user;
+            // Save to database
+            var userId = await _userRepository.CreateAsync(newUser);
+            newUser.Id = userId;
+
+            // Create social account link
+            var socialAccount = new SocialAccount
+            {
+                UserId = userId,
+                Provider = externalLoginDto.Provider,
+                ProviderUserId = externalLoginDto.ProviderId!,
+                CreatedAt = DateTime.UtcNow
+            };
+            await _socialAccountRepository.CreateAsync(socialAccount);
+
+            // Convert to legacy format for response
+            user = LegacyUser.FromUser(newUser);
+            user.Provider = externalLoginDto.Provider;
+            user.ProviderId = externalLoginDto.ProviderId;
         }
         else
         {
-            // Update last login info
-            user.UpdatedAt = DateTime.UtcNow;
-            _users[user.Email] = user;
+            // User exists - update last login
+            var dbUser = await _userRepository.GetByEmailAsync(user.Email);
+            if (dbUser != null)
+            {
+                dbUser.UpdatedAt = DateTime.UtcNow;
+                await _userRepository.UpdateAsync(dbUser);
+            }
         }
 
         return new AuthResponseDto
@@ -223,35 +308,37 @@ public class AuthService : IAuthService
     {
         var email = resetPasswordDto.Email.ToLower();
 
-        // Check if user exists
-        if (!_users.ContainsKey(email))
+        // Get user from database
+        var user = await GetUserByEmailAsync(email);
+        if (user == null)
         {
             throw new Exception("User not found");
         }
 
-        var user = _users[email];
+        // Convert to database user and update password
+        var dbUser = await _userRepository.GetByEmailAsync(email);
+        if (dbUser == null)
+        {
+            throw new Exception("User not found");
+        }
 
-        // Update password
-        user.PasswordHash = CryptographyHelper.HashPassword(resetPasswordDto.NewPassword);
-        user.UpdatedAt = DateTime.UtcNow;
+        dbUser.PasswordHash = CryptographyHelper.HashPassword(resetPasswordDto.NewPassword);
+        dbUser.UpdatedAt = DateTime.UtcNow;
 
-        _users[email] = user;
-
-        await Task.CompletedTask;
+        await _userRepository.UpdateAsync(dbUser);
     }
 
     public async Task ChangePasswordAsync(Guid userId, ChangePasswordDto changePasswordDto)
     {
-        // Find user by ID
-        var user = _users.Values.FirstOrDefault(u => u.UserId == userId);
-
+        // Get user from database
+        var user = await GetUserByIdAsync(userId);
         if (user == null)
         {
             throw new Exception("User not found");
         }
 
         // Verify current password
-        if (!CryptographyHelper.VerifyPassword(changePasswordDto.CurrentPassword, user.PasswordHash))
+        if (string.IsNullOrEmpty(user.PasswordHash) || !CryptographyHelper.VerifyPassword(changePasswordDto.CurrentPassword, user.PasswordHash))
         {
             throw new Exception("Current password is incorrect");
         }
@@ -263,11 +350,17 @@ public class AuthService : IAuthService
             throw new Exception("Invalid or expired OTP code");
         }
 
-        // Update password
-        user.PasswordHash = CryptographyHelper.HashPassword(changePasswordDto.NewPassword);
-        user.UpdatedAt = DateTime.UtcNow;
+        // Get database user and update password
+        var dbUser = await _userRepository.GetByEmailAsync(user.Email);
+        if (dbUser == null)
+        {
+            throw new Exception("User not found");
+        }
 
-        _users[user.Email] = user;
+        dbUser.PasswordHash = CryptographyHelper.HashPassword(changePasswordDto.NewPassword);
+        dbUser.UpdatedAt = DateTime.UtcNow;
+
+        await _userRepository.UpdateAsync(dbUser);
         
         // Invalidate OTP after successful password change
         await _otpService.InvalidateOtpAsync(user.Email, "ChangePassword");
@@ -276,7 +369,6 @@ public class AuthService : IAuthService
     public async Task<Enable2FaResponseDto> EnableTwoFactorAsync(Guid userId)
     {
         var user = await GetUserByIdAsync(userId);
-
         if (user == null)
         {
             throw new Exception("User not found");
@@ -290,10 +382,30 @@ public class AuthService : IAuthService
         // Generate new 2FA secret
         var twoFactorData = _twoFactorService.GenerateTwoFactorSecret(user.Email);
 
-        // Store the secret temporarily (not activated yet until user verifies)
-        user.TwoFactorSecret = twoFactorData.Secret;
-        user.UpdatedAt = DateTime.UtcNow;
-        _users[user.Email] = user;
+        // Convert Guid to long ID
+        var bytes = userId.ToByteArray();
+        var longId = BitConverter.ToInt64(bytes, 0);
+
+        // Check if 2FA record exists
+        var existing2FA = await _twoFactorRepository.GetByUserIdAsync(longId);
+        if (existing2FA != null)
+        {
+            // Update existing
+            existing2FA.Secret = twoFactorData.Secret;
+            existing2FA.Enabled = false; // Not enabled until verified
+            await _twoFactorRepository.UpdateAsync(existing2FA);
+        }
+        else
+        {
+            // Create new 2FA record
+            var twoFactor = new TwoFactorAuth
+            {
+                UserId = longId,
+                Secret = twoFactorData.Secret,
+                Enabled = false
+            };
+            await _twoFactorRepository.CreateAsync(twoFactor);
+        }
 
         return twoFactorData;
     }
@@ -301,80 +413,97 @@ public class AuthService : IAuthService
     public async Task VerifyAndActivateTwoFactorAsync(Guid userId, string code)
     {
         var user = await GetUserByIdAsync(userId);
-
         if (user == null)
         {
             throw new Exception("User not found");
         }
 
-        if (user.TwoFactorEnabled)
-        {
-            throw new Exception("2FA is already enabled");
-        }
+        // Convert Guid to long ID
+        var bytes = userId.ToByteArray();
+        var longId = BitConverter.ToInt64(bytes, 0);
 
-        if (string.IsNullOrWhiteSpace(user.TwoFactorSecret))
+        // Get 2FA record
+        var twoFactor = await _twoFactorRepository.GetByUserIdAsync(longId);
+        if (twoFactor == null || string.IsNullOrWhiteSpace(twoFactor.Secret))
         {
             throw new Exception("2FA secret not generated. Please request to enable 2FA first.");
         }
 
+        if (twoFactor.Enabled)
+        {
+            throw new Exception("2FA is already enabled");
+        }
+
         // Verify the code
-        if (!_twoFactorService.VerifyTwoFactorCode(user.TwoFactorSecret, code))
+        if (!_twoFactorService.VerifyTwoFactorCode(twoFactor.Secret, code))
         {
             throw new Exception("Invalid 2FA code");
         }
 
         // Activate 2FA
-        user.TwoFactorEnabled = true;
-        user.UpdatedAt = DateTime.UtcNow;
-        _users[user.Email] = user;
-
-        await Task.CompletedTask;
+        twoFactor.Enabled = true;
+        await _twoFactorRepository.UpdateAsync(twoFactor);
     }
 
     public async Task DisableTwoFactorAsync(Guid userId, string password)
     {
         var user = await GetUserByIdAsync(userId);
-
         if (user == null)
         {
             throw new Exception("User not found");
         }
 
-        if (!user.TwoFactorEnabled)
-        {
-            throw new Exception("2FA is not enabled");
-        }
-
-        // Verify password for security
-        if (!CryptographyHelper.VerifyPassword(password, user.PasswordHash))
+        // Verify password
+        if (string.IsNullOrEmpty(user.PasswordHash) || !CryptographyHelper.VerifyPassword(password, user.PasswordHash))
         {
             throw new Exception("Invalid password");
         }
 
-        // Disable 2FA
-        user.TwoFactorEnabled = false;
-        user.TwoFactorSecret = null;
-        user.UpdatedAt = DateTime.UtcNow;
-        _users[user.Email] = user;
+        // Convert Guid to long ID
+        var bytes = userId.ToByteArray();
+        var longId = BitConverter.ToInt64(bytes, 0);
 
-        await Task.CompletedTask;
+        // Get and disable 2FA
+        var twoFactor = await _twoFactorRepository.GetByUserIdAsync(longId);
+        if (twoFactor != null)
+        {
+            twoFactor.Enabled = false;
+            twoFactor.Secret = string.Empty;
+            await _twoFactorRepository.UpdateAsync(twoFactor);
+        }
     }
 
-    public async Task<User?> GetUserByIdAsync(Guid userId)
+    public async Task<LegacyUser?> GetUserByIdAsync(Guid userId)
     {
-        var user = _users.Values.FirstOrDefault(u => u.UserId == userId);
-        return await Task.FromResult(user);
+        // Convert Guid to long (take last 8 bytes)
+        var bytes = userId.ToByteArray();
+        var longId = BitConverter.ToInt64(bytes, 0);
+        
+        var dbUser = await _userRepository.GetUserWithAllRelationsAsync(longId);
+        if (dbUser == null) return null;
+
+        return LegacyUser.FromUser(dbUser);
+    }
+
+    public async Task<bool> Verify2FAAsync(Guid userId, string twoFactorCode)
+    {
+        var user = await GetUserByIdAsync(userId);
+        if (user == null || !user.TwoFactorEnabled)
+        {
+            return false;
+        }
+
+        return _twoFactorService.VerifyTwoFactorCode(user.TwoFactorSecret ?? string.Empty, twoFactorCode);
     }
 
     public async Task SendVerificationEmailAsync(string email)
     {
         // Check if user exists
-        if (!_users.ContainsKey(email.ToLower()))
+        var user = await GetUserByEmailAsync(email.ToLower());
+        if (user == null)
         {
             throw new Exception("User not found");
         }
-
-        var user = _users[email.ToLower()];
 
         // Check if already verified
         if (user.IsEmailVerified)
@@ -390,24 +519,21 @@ public class AuthService : IAuthService
     {
         // Verify OTP
         var isValid = await _otpService.VerifyOtpAsync(email, otpCode, "EmailVerification");
-        
         if (!isValid)
         {
             throw new Exception("Invalid or expired OTP code");
         }
 
         // Update user's email verification status
-        if (!_users.ContainsKey(email.ToLower()))
+        var dbUser = await _userRepository.GetByEmailAsync(email.ToLower());
+        if (dbUser == null)
         {
             throw new Exception("User not found");
         }
 
-        var user = _users[email.ToLower()];
-        user.IsEmailVerified = true;
-        user.UpdatedAt = DateTime.UtcNow;
-        _users[user.Email] = user;
-
-        await Task.CompletedTask;
+        dbUser.Status = "Active"; // Change from Pending to Active
+        dbUser.UpdatedAt = DateTime.UtcNow;
+        await _userRepository.UpdateAsync(dbUser);
     }
 
     public async Task<AuthResponseDto> BinanceLoginAsync(BinanceLoginDto dto)
@@ -433,37 +559,58 @@ public class AuthService : IAuthService
 
         // Check if user already exists with this Binance account
         var existingUser = await GetUserByProviderAsync("Binance", binanceUid);
-
-        User user;
-        if (existingUser == null)
+        if (existingUser != null)
         {
-            // Create new user with Binance account
-            user = new User
+            return new AuthResponseDto
             {
-                UserId = Guid.NewGuid(),
-                Email = $"binance_{binanceUid}@exchange.local", // Pseudo email
-                PasswordHash = string.Empty, // External login, no password
-                FullName = $"Binance User {binanceUid}",
-                Provider = "Binance",
-                ProviderId = binanceUid,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
+                UserId = existingUser.UserId,
+                Email = existingUser.Email,
+                FullName = existingUser.FullName,
+                TwoFactorEnabled = existingUser.TwoFactorEnabled,
+                Require2FA = false
             };
+        }
 
-            _users[user.Email] = user;
-        }
-        else
+        // Create new user with Binance account
+        var newUser = new Entities.User
         {
-            user = existingUser;
-        }
+            Email = $"binance_{binanceUid}@exchange.local",
+            Username = $"Binance User {binanceUid}",
+            PasswordHash = null,
+            Status = "Active",
+            Role = "User",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            Profile = new UserProfile
+            {
+                DisplayName = $"Binance User {binanceUid}"
+            }
+        };
+
+        var userId = await _userRepository.CreateAsync(newUser);
+        newUser.Id = userId;
+
+        // Create social account link for Binance
+        var socialAccount = new SocialAccount
+        {
+            UserId = userId,
+            Provider = "Binance",
+            ProviderUserId = binanceUid,
+            CreatedAt = DateTime.UtcNow
+        };
+        await _socialAccountRepository.CreateAsync(socialAccount);
+
+        var legacyUser = LegacyUser.FromUser(newUser);
+        legacyUser.Provider = "Binance";
+        legacyUser.ProviderId = binanceUid;
 
         return new AuthResponseDto
         {
-            UserId = user.UserId,
-            Email = user.Email,
-            FullName = user.FullName,
-            TwoFactorEnabled = user.TwoFactorEnabled,
-            Require2FA = false // Skip 2FA for exchange login (API key is already strong auth)
+            UserId = legacyUser.UserId,
+            Email = legacyUser.Email,
+            FullName = legacyUser.FullName,
+            TwoFactorEnabled = false,
+            Require2FA = false
         };
     }
 
@@ -474,7 +621,7 @@ public class AuthService : IAuthService
             "OKX",
             dto.ApiKey,
             dto.SecretKey,
-            false, // OKX doesn't have testnet in same way
+            false,
             dto.Passphrase
         );
 
@@ -491,37 +638,58 @@ public class AuthService : IAuthService
 
         // Check if user already exists with this OKX account
         var existingUser = await GetUserByProviderAsync("OKX", okxUid);
-
-        User user;
-        if (existingUser == null)
+        if (existingUser != null)
         {
-            // Create new user with OKX account
-            user = new User
+            return new AuthResponseDto
             {
-                UserId = Guid.NewGuid(),
-                Email = $"okx_{okxUid}@exchange.local", // Pseudo email
-                PasswordHash = string.Empty, // External login, no password
-                FullName = $"OKX User {okxUid}",
-                Provider = "OKX",
-                ProviderId = okxUid,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
+                UserId = existingUser.UserId,
+                Email = existingUser.Email,
+                FullName = existingUser.FullName,
+                TwoFactorEnabled = existingUser.TwoFactorEnabled,
+                Require2FA = false
             };
+        }
 
-            _users[user.Email] = user;
-        }
-        else
+        // Create new user with OKX account
+        var newUser = new Entities.User
         {
-            user = existingUser;
-        }
+            Email = $"okx_{okxUid}@exchange.local",
+            Username = $"OKX User {okxUid}",
+            PasswordHash = null,
+            Status = "Active",
+            Role = "User",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            Profile = new UserProfile
+            {
+                DisplayName = $"OKX User {okxUid}"
+            }
+        };
+
+        var userId = await _userRepository.CreateAsync(newUser);
+        newUser.Id = userId;
+
+        // Create social account link for OKX
+        var socialAccount = new SocialAccount
+        {
+            UserId = userId,
+            Provider = "OKX",
+            ProviderUserId = okxUid,
+            CreatedAt = DateTime.UtcNow
+        };
+        await _socialAccountRepository.CreateAsync(socialAccount);
+
+        var legacyUser = LegacyUser.FromUser(newUser);
+        legacyUser.Provider = "OKX";
+        legacyUser.ProviderId = okxUid;
 
         return new AuthResponseDto
         {
-            UserId = user.UserId,
-            Email = user.Email,
-            FullName = user.FullName,
-            TwoFactorEnabled = user.TwoFactorEnabled,
-            Require2FA = false // Skip 2FA for exchange login (API key is already strong auth)
+            UserId = legacyUser.UserId,
+            Email = legacyUser.Email,
+            FullName = legacyUser.FullName,
+            TwoFactorEnabled = false,
+            Require2FA = false
         };
     }
 }

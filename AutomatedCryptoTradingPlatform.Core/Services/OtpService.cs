@@ -5,13 +5,14 @@ namespace AutomatedCryptoTradingPlatform.Core.Services;
 
 public class OtpService : IOtpService
 {
-    // In-memory storage for OTPs (will be replaced with database later)
-    private static readonly Dictionary<string, Otp> _otps = new();
     private readonly IEmailService _emailService;
+    private readonly IRedisService _redisService;
+    private const string OTP_PREFIX = "otp:";
 
-    public OtpService(IEmailService emailService)
+    public OtpService(IEmailService emailService, IRedisService redisService)
     {
         _emailService = emailService;
+        _redisService = redisService;
     }
 
     public async Task<string> GenerateAndSendOtpAsync(string email, string type)
@@ -32,9 +33,9 @@ public class OtpService : IOtpService
             CreatedAt = DateTime.UtcNow
         };
 
-        // Store in memory (key format: email_type)
-        var key = $"{email.ToLower()}_{type}";
-        _otps[key] = otp;
+        // Store in Redis with 5 minutes TTL (key format: otp:email_type)
+        var key = $"{OTP_PREFIX}{email.ToLower()}_{type}";
+        await _redisService.SetObjectAsync(key, otp, TimeSpan.FromMinutes(5));
 
         // Send email
         await _emailService.SendOtpEmailAsync(email, otpCode, type);
@@ -44,10 +45,13 @@ public class OtpService : IOtpService
 
     public async Task<bool> VerifyOtpAsync(string email, string otpCode, string type)
     {
-        var key = $"{email.ToLower()}_{type}";
+        var key = $"{OTP_PREFIX}{email.ToLower()}_{type}";
 
+        // Get OTP from Redis
+        var otp = await _redisService.GetObjectAsync<Otp>(key);
+        
         // Check if OTP exists
-        if (!_otps.TryGetValue(key, out var otp))
+        if (otp == null)
         {
             return false;
         }
@@ -58,9 +62,10 @@ public class OtpService : IOtpService
             return false;
         }
 
-        // Check if expired
+        // Check if expired (Redis TTL handles this, but double-check)
         if (DateTime.UtcNow > otp.ExpiresAt)
         {
+            await _redisService.DeleteKeyAsync(key);
             return false;
         }
 
@@ -70,22 +75,17 @@ public class OtpService : IOtpService
             return false;
         }
 
-        // Mark as used
+        // Mark as used and update in Redis
         otp.IsUsed = true;
-        _otps[key] = otp;
+        var remainingTtl = await _redisService.GetTimeToLiveAsync(key);
+        await _redisService.SetObjectAsync(key, otp, remainingTtl);
 
-        return await Task.FromResult(true);
+        return true;
     }
 
     public async Task InvalidateOtpAsync(string email, string type)
     {
-        var key = $"{email.ToLower()}_{type}";
-        
-        if (_otps.ContainsKey(key))
-        {
-            _otps.Remove(key);
-        }
-
-        await Task.CompletedTask;
+        var key = $"{OTP_PREFIX}{email.ToLower()}_{type}";
+        await _redisService.DeleteKeyAsync(key);
     }
 }

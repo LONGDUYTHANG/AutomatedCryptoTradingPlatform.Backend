@@ -1,6 +1,47 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: crypto-trading-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: crypto_trading
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./Database/migrations:/docker-entrypoint-initdb.d
+    networks:
+      - crypto-trading-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache Service
+  redis:
+    image: redis:7-alpine
+    container_name: crypto-trading-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --requirepass ""
+    networks:
+      - crypto-trading-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # API Service
   api:
     build:
       context: .
@@ -12,12 +53,25 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:8080
+      - RedisSettings__ConnectionString=redis:6379
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=crypto_trading;Username=postgres;Password=postgres
     volumes:
       # Mount appsettings.json for local development
       - ./AutomatedCryptoTradingPlatform.API/appsettings.json:/app/appsettings.json:ro
     networks:
       - crypto-trading-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
 
 networks:
   crypto-trading-network:

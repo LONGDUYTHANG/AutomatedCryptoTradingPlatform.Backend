@@ -169,4 +169,31 @@ public class ExchangeController : ControllerBase
             });
         }
     }
+
+    [HttpGet("supported")]
+    [AllowAnonymous] // Public endpoint
+    public async Task<IActionResult> GetSupportedExchanges()
+    {
+        try
+        {
+            var result = await _exchangeKeyService.GetSupportedExchangesAsync();
+
+            return Ok(new BaseResponse<List<ExchangeDto>>
+            {
+                Success = true,
+                Message = "Supported exchanges retrieved successfully",
+                Data = result,
+                StatusCode = 200
+            });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new BaseResponse<object>
+            {
+                Success = false,
+                Message = ex.Message,
+                StatusCode = 400
+            });
+        }
+    }
 }

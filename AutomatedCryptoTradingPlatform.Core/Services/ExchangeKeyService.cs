@@ -5,6 +5,7 @@ using AutomatedCryptoTradingPlatform.Core.Dtos.Requests;
 using AutomatedCryptoTradingPlatform.Core.Dtos.Responses;
 using AutomatedCryptoTradingPlatform.Core.Entities;
 using AutomatedCryptoTradingPlatform.Core.Helpers;
+using AutomatedCryptoTradingPlatform.Core.Interfaces;
 using AutomatedCryptoTradingPlatform.Core.Interfaces.Services;
 using Microsoft.Extensions.Configuration;
 
@@ -12,22 +13,34 @@ namespace AutomatedCryptoTradingPlatform.Core.Services;
 
 public class ExchangeKeyService : IExchangeKeyService
 {
-    // In-memory storage (will be replaced with database)
-    private static readonly Dictionary<string, List<ExchangeKey>> _exchangeKeys = new();
     private readonly IConfiguration _configuration;
     private readonly HttpClient _httpClient;
+    private readonly IExchangeRepository _exchangeRepository;
+    private readonly IExchangeAccountRepository _exchangeAccountRepository;
+    private readonly IExchangeApiKeyRepository _exchangeApiKeyRepository;
 
-    public ExchangeKeyService(IConfiguration configuration, HttpClient httpClient)
+    public ExchangeKeyService(
+        IConfiguration configuration, 
+        HttpClient httpClient,
+        IExchangeRepository exchangeRepository,
+        IExchangeAccountRepository exchangeAccountRepository,
+        IExchangeApiKeyRepository exchangeApiKeyRepository)
     {
         _configuration = configuration;
         _httpClient = httpClient;
+        _exchangeRepository = exchangeRepository;
+        _exchangeAccountRepository = exchangeAccountRepository;
+        _exchangeApiKeyRepository = exchangeApiKeyRepository;
     }
 
     public async Task<ExchangeKeyResponseDto> ConnectExchangeAsync(Guid userId, ConnectExchangeDto connectDto)
     {
-        // Validate exchange name
-        var validExchanges = new[] { "Binance", "OKX", "BinanceTestnet" };
-        if (!validExchanges.Contains(connectDto.ExchangeName, StringComparer.OrdinalIgnoreCase))
+        // Convert Guid userId to long (assuming User.Id in database)
+        long userIdLong = ConvertGuidToLong(userId);
+        
+        // Validate exchange name and get exchange entity
+        var exchange = await _exchangeRepository.GetByNameAsync(connectDto.ExchangeName);
+        if (exchange == null)
         {
             throw new Exception($"Unsupported exchange: {connectDto.ExchangeName}");
         }
@@ -56,98 +69,138 @@ public class ExchangeKeyService : IExchangeKeyService
             ? CryptographyHelper.Encrypt(connectDto.Passphrase, encryptionKey)
             : null;
 
-        // Create exchange key entity
-        var exchangeKey = new ExchangeKey
+        // Check if user already has an account for this exchange
+        var existingAccount = await _exchangeAccountRepository.GetByUserAndExchangeAsync(userIdLong, exchange.Id);
+        
+        long accountId;
+        if (existingAccount == null)
         {
-            KeyId = Guid.NewGuid(),
-            UserId = userId,
-            ExchangeName = connectDto.ExchangeName,
-            ApiKey = encryptedApiKey,
-            SecretKey = encryptedSecretKey,
-            Passphrase = encryptedPassphrase,
-            Label = connectDto.Label ?? $"{connectDto.ExchangeName} Account",
-            IsActive = true,
-            CreatedAt = DateTime.UtcNow,
-            LastVerified = DateTime.UtcNow
-        };
-
-        // Store in memory
-        var userKey = userId.ToString();
-        if (!_exchangeKeys.ContainsKey(userKey))
+            // Create new exchange account
+            var newAccount = new ExchangeAccount
+            {
+                UserId = userIdLong,
+                ExchangeId = exchange.Id,
+                Label = connectDto.Label ?? $"{connectDto.ExchangeName} Account",
+                CreatedAt = DateTime.UtcNow
+            };
+            accountId = await _exchangeAccountRepository.CreateAsync(newAccount);
+        }
+        else
         {
-            _exchangeKeys[userKey] = new List<ExchangeKey>();
+            accountId = existingAccount.Id;
         }
 
-        _exchangeKeys[userKey].Add(exchangeKey);
+        // Create API key
+        var apiKey = new ExchangeApiKey
+        {
+            ExchangeAccountId = accountId,
+            Label = connectDto.Label ?? $"{connectDto.ExchangeName} API Key",
+            ApiKey = encryptedApiKey,
+            ApiSecret = encryptedSecretKey,
+            Passphrase = encryptedPassphrase,
+            Permissions = "[]", // TODO: Store actual permissions from verifyResult
+            Status = "active",
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var apiKeyId = await _exchangeApiKeyRepository.CreateAsync(apiKey);
+        apiKey.Id = apiKeyId;
 
         return new ExchangeKeyResponseDto
         {
-            KeyId = exchangeKey.KeyId,
-            ExchangeName = exchangeKey.ExchangeName,
+            KeyId = ConvertLongToGuid(apiKeyId), // Convert back to Guid for backward compatibility
+            ExchangeName = exchange.Name,
             ApiKeyMasked = MaskApiKey(connectDto.ApiKey),
-            Label = exchangeKey.Label,
-            IsActive = exchangeKey.IsActive,
-            CreatedAt = exchangeKey.CreatedAt,
-            LastVerified = exchangeKey.LastVerified
+            Label = apiKey.Label,
+            IsActive = apiKey.Status == "active",
+            CreatedAt = apiKey.CreatedAt,
+            LastVerified = DateTime.UtcNow
         };
     }
 
     public async Task DisconnectExchangeAsync(Guid userId, Guid keyId)
     {
-        var userKey = userId.ToString();
+        long userIdLong = ConvertGuidToLong(userId);
+        long keyIdLong = ConvertGuidToLong(keyId);
         
-        if (!_exchangeKeys.ContainsKey(userKey))
+        // Verify ownership before deletion
+        var belongsToUser = await _exchangeApiKeyRepository.BelongsToUserAsync(keyIdLong, userIdLong);
+        if (!belongsToUser)
         {
-            throw new Exception("No exchange keys found for this user");
+            throw new Exception("Exchange key not found or access denied");
         }
 
-        var exchangeKey = _exchangeKeys[userKey].FirstOrDefault(k => k.KeyId == keyId);
-        if (exchangeKey == null)
+        var deleted = await _exchangeApiKeyRepository.DeleteAsync(keyIdLong);
+        if (!deleted)
         {
-            throw new Exception("Exchange key not found");
+            throw new Exception("Failed to disconnect exchange");
         }
-
-        _exchangeKeys[userKey].Remove(exchangeKey);
-        await Task.CompletedTask;
     }
 
     public async Task<List<ExchangeKeyResponseDto>> GetUserExchangeKeysAsync(Guid userId)
     {
-        var userKey = userId.ToString();
+        long userIdLong = ConvertGuidToLong(userId);
         
-        if (!_exchangeKeys.ContainsKey(userKey))
-        {
-            return new List<ExchangeKeyResponseDto>();
-        }
-
+        // Get all accounts with relations (Exchange + ApiKeys)
+        var accounts = await _exchangeAccountRepository.GetByUserIdWithRelationsAsync(userIdLong);
+        
         var encryptionKey = _configuration["EncryptionSettings:Key"] 
             ?? throw new Exception("Encryption key not configured");
 
-        var keys = _exchangeKeys[userKey].Select(k => new ExchangeKeyResponseDto
+        var result = new List<ExchangeKeyResponseDto>();
+        
+        foreach (var account in accounts)
         {
-            KeyId = k.KeyId,
-            ExchangeName = k.ExchangeName,
-            ApiKeyMasked = MaskApiKey(CryptographyHelper.Decrypt(k.ApiKey, encryptionKey)),
-            Label = k.Label,
-            IsActive = k.IsActive,
-            CreatedAt = k.CreatedAt,
-            LastVerified = k.LastVerified
-        }).ToList();
+            foreach (var apiKey in account.ApiKeys)
+            {
+                result.Add(new ExchangeKeyResponseDto
+                {
+                    KeyId = ConvertLongToGuid(apiKey.Id),
+                    ExchangeName = account.Exchange?.Name ?? "Unknown",
+                    ApiKeyMasked = MaskApiKey(CryptographyHelper.Decrypt(apiKey.ApiKey, encryptionKey)),
+                    Label = apiKey.Label,
+                    IsActive = apiKey.Status == "active",
+                    CreatedAt = apiKey.CreatedAt,
+                    LastVerified = DateTime.UtcNow // TODO: Add last_verified to database schema
+                });
+            }
+        }
 
-        return await Task.FromResult(keys);
+        return result;
     }
 
     public async Task<ExchangeKey?> GetExchangeKeyAsync(Guid userId, Guid keyId)
     {
-        var userKey = userId.ToString();
+        long userIdLong = ConvertGuidToLong(userId);
+        long keyIdLong = ConvertGuidToLong(keyId);
         
-        if (!_exchangeKeys.ContainsKey(userKey))
+        // Verify ownership
+        var belongsToUser = await _exchangeApiKeyRepository.BelongsToUserAsync(keyIdLong, userIdLong);
+        if (!belongsToUser)
         {
             return null;
         }
 
-        var exchangeKey = _exchangeKeys[userKey].FirstOrDefault(k => k.KeyId == keyId);
-        return await Task.FromResult(exchangeKey);
+        var apiKey = await _exchangeApiKeyRepository.GetByIdWithRelationsAsync(keyIdLong);
+        if (apiKey == null)
+        {
+            return null;
+        }
+
+        // Map to old ExchangeKey format for backward compatibility
+        return new ExchangeKey
+        {
+            KeyId = ConvertLongToGuid(apiKey.Id),
+            UserId = userId,
+            ExchangeName = apiKey.Account?.Exchange?.Name ?? "Unknown",
+            ApiKey = apiKey.ApiKey,
+            SecretKey = apiKey.ApiSecret,
+            Passphrase = apiKey.Passphrase,
+            Label = apiKey.Label,
+            IsActive = apiKey.Status == "active",
+            CreatedAt = apiKey.CreatedAt,
+            LastVerified = DateTime.UtcNow
+        };
     }
 
     public async Task<VerifyConnectionResponseDto> VerifyConnectionAsync(
@@ -467,5 +520,33 @@ public class ExchangeKeyService : IExchangeKeyService
             ["uid"] = uid,
             ["data"] = result
         };
+    }
+
+    // Helper methods for Guid <-> long conversion (backward compatibility)
+    private static long ConvertGuidToLong(Guid guid)
+    {
+        // Use first 8 bytes of Guid to create long
+        var bytes = guid.ToByteArray();
+        return BitConverter.ToInt64(bytes, 0);
+    }
+
+    private static Guid ConvertLongToGuid(long value)
+    {
+        // Create Guid from long (pad with zeros)
+        var bytes = new byte[16];
+        BitConverter.GetBytes(value).CopyTo(bytes, 0);
+        return new Guid(bytes);
+    }
+
+    public async Task<List<ExchangeDto>> GetSupportedExchangesAsync()
+    {
+        var exchanges = await _exchangeRepository.GetAllAsync();
+        
+        return exchanges.Select(e => new ExchangeDto
+        {
+            Id = e.Id,
+            Name = e.Name,
+            Type = e.Type
+        }).ToList();
     }
 }
